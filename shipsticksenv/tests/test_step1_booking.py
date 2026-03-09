@@ -23,3 +23,6 @@ def test_landing_and_get_started_navigates_to_booking(booking_page: BookingStep1
 
     # Select shipment type
     booking_page.select_shipment_type_one_way()
+
+    # Enter origin (handle async autocomplete)
+    booking_page.enter_origin("1234 Main Street, Los Angeles, CA, USA")
