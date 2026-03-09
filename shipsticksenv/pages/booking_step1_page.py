@@ -20,9 +20,16 @@ class BookingStep1Page:
         self.page.get_by_text("Great golf trips", exact=False).first.scroll_into_view_if_needed()
         return self.page.locator("a, button").filter(has_text=re.compile(r"Get started", re.I)).nth(1)
 
-    # def click_get_started(self) -> None:
-    #     """Click Get Started to go to booking step 1."""
-    #     self.page.get_by_role("link", name="Get Started").click()
+    def shipment_type_dropdown(self):
+        # On /book/ship the dropdown button is associated with label "Trip Type"; fallback to visible value.
+        return self.page.get_by_label("Trip Type").or_(self.page.get_by_text("Round trip").first)
+
+
+
+    
+
+
+
 
     def click_get_started(self):
         button = self.get_started_button()
@@ -30,3 +37,11 @@ class BookingStep1Page:
         button.scroll_into_view_if_needed()  # Handle scroll for lower button
         button.click()
         self.page.wait_for_url("**/book/ship")  # Async handle: Wait for redirect
+
+    def select_shipment_type_one_way(self):
+        self.shipment_type_dropdown().click()
+        # Options live in HeadlessUI portal; target the option, not the listbox.
+        portal = self.page.locator("#headlessui-portal-root")
+        one_way_option = portal.get_by_role("option", name=re.compile(r"One[- ]way", re.I)).first
+        one_way_option.wait_for(state="visible")
+        one_way_option.click()
