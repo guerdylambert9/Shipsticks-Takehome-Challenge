@@ -1,0 +1,25 @@
+# Virtual env
+venv/
+shipsticksenv/
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Pytest / Playwright
+.pytest_cache/
+report.html
+playwright-report/
+test-results/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
