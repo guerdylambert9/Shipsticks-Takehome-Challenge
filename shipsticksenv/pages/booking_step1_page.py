@@ -30,6 +30,11 @@ class BookingStep1Page:
         # Why: User-visible placeholder; stable if label changes, better than CSS
         return self.page.get_by_placeholder("Choose origin...")
 
+    def destination_input(self):
+        # Locator: placeholder text
+        # Why: Same as origin – consistent, readable
+        return self.page.get_by_placeholder("Choose destination...")
+
     def _option_for_address(self, address: str):
         """Option locator that matches address with flexibility (API may return with/without ', USA', etc.)."""
         parts = [p.strip() for p in address.split(",") if p.strip()]
@@ -67,6 +72,20 @@ class BookingStep1Page:
         if assert_value_after:
             expect(input_locator).to_have_value(address)
 
+    def _dismiss_destination_note_dialog_if_present(self):
+        """Dismiss 'Please note before proceeding' dialog by clicking 'I understand' if it appears.
+        Uses dynamic wait: proceeds as soon as the button is visible (no static sleep).
+        """
+        understand_btn = self.page.get_by_role("button", name="I understand")
+        try:
+            understand_btn.wait_for(state="visible")
+            understand_btn.click()
+            self.page.get_by_role("dialog").wait_for(state="hidden")
+        except Exception:
+            pass
+
+
+
 
 
 
@@ -83,6 +102,12 @@ class BookingStep1Page:
     def enter_origin(self, address: str):
         def _do():
             self._fill_and_select_address(self.origin_input(), address)
+        retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
+
+    def enter_destination(self, address: str):
+        def _do():
+            self._fill_and_select_address(self.destination_input(), address)
+            self._dismiss_destination_note_dialog_if_present()
         retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
 
     def click_get_started(self):
