@@ -214,4 +214,6 @@ class BookingStep1Page:
         golf_bags_input.scroll_into_view_if_needed()
         golf_bags_input.fill("1")
         expect(golf_bags_input).to_have_value("1")
-        
+        # Validate "Max 42 lb. Standard" is selected by default for Golf Bags #1
+        standard_option = self.page.get_by_role("radio", name=re.compile(r"Max 42 lb\.\s*Standard|Standard", re.I))
+        expect(standard_option.first).to_be_checked()
