@@ -29,3 +29,6 @@ def test_landing_and_get_started_navigates_to_booking(booking_page: BookingStep1
 
     # Enter destination (handle async autocomplete)
     booking_page.enter_destination("4321 Main St, Miami Lakes, FL, USA")
+
+    # Select item
+    booking_page.select_item_golf_bag_standard()
