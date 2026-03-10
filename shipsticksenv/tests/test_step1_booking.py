@@ -35,3 +35,6 @@ def test_landing_and_get_started_navigates_to_booking(booking_page: BookingStep1
 
     # Select delivery date (handle async picker)
     booking_page.select_delivery_date("April 8, 2026")  # Adjust format if picker uses day only; e.g., "8"
+
+    # Select service level
+    booking_page.select_service_level_ground()
