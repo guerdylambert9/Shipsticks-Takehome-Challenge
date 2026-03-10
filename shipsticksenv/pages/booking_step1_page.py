@@ -25,6 +25,10 @@ class BookingStep1Page:
         # On /book/ship the dropdown button is associated with label "Trip Type"; fallback to visible value.
         return self.page.get_by_label("Trip Type").or_(self.page.get_by_text("Round trip").first)
 
+    def _headlessui_dialog(self):
+        """Headless UI renders dialogs in a portal; scope to that so we target the right one."""
+        return self.page.locator("#headlessui-portal-root [role='dialog']")
+
     def origin_input(self):
         # Locator: placeholder text
         # Why: User-visible placeholder; stable if label changes, better than CSS
@@ -73,16 +77,87 @@ class BookingStep1Page:
             expect(input_locator).to_have_value(address)
 
     def _dismiss_destination_note_dialog_if_present(self):
-        """Dismiss 'Please note before proceeding' dialog by clicking 'I understand' if it appears.
-        Uses dynamic wait: proceeds as soon as the button is visible (no static sleep).
+        """Dismiss 'Please note before proceeding' modal by clicking I understand.
+        Polls until the button appears (async after destination) or max wait — no fixed sleep.
         """
-        understand_btn = self.page.get_by_role("button", name="I understand")
+        understand_btn = self.page.get_by_role("button", name=re.compile(r"I understand", re.I)).first
+        dialog = self.page.get_by_role("dialog").filter(
+            has_text=re.compile(r"Please note", re.I)
+        )
+        max_wait_ms = 15_000
+        poll_ms = 250
+        elapsed = 0
+        while elapsed < max_wait_ms:
+            try:
+                if understand_btn.is_visible():
+                    understand_btn.click()
+                    try:
+                        dialog.first.wait_for(state="hidden", timeout=10_000)
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+            self.page.wait_for_timeout(poll_ms)
+            elapsed += poll_ms
+
+    def _dismiss_cookie_consent_if_present(self):
+        """Dismiss OneTrust/cookie banner if visible so it doesn't intercept clicks."""
+        accept_btn = self.page.locator("#onetrust-accept-btn-handler").or_(
+            self.page.get_by_role("button", name=re.compile(r"Accept all|Accept|Allow all", re.I))
+        )
         try:
-            understand_btn.wait_for(state="visible")
-            understand_btn.click()
-            self.page.get_by_role("dialog").wait_for(state="hidden")
+            accept_btn.first.wait_for(state="visible", timeout=3000)
+            accept_btn.first.click()
         except Exception:
             pass
+
+    def _close_any_modal_overlay(self):
+        """Close any open modal (e.g. Headless UI dialog) so it doesn't cover the page.
+        Tries: 'I understand' click, backdrop click, Escape (multiple), then JS portal clear as last resort.
+        """
+        dialog = self._headlessui_dialog()
+        for attempt in range(3):
+            try:
+                if not self._is_headlessui_modal_open():
+                    return
+            except Exception:
+                return
+            # 1) Click "I understand" if present
+            try:
+                btn = self.page.get_by_role("button", name="I understand")
+                if btn.is_visible():
+                    btn.click()
+                    dialog.wait_for(state="hidden", timeout=2000)
+                    return
+            except Exception:
+                pass
+            # 2) Click Headless UI backdrop
+            try:
+                portal = self.page.locator("#headlessui-portal-root")
+                backdrop = portal.locator("div.fixed[aria-hidden='true']").first
+                if backdrop.is_visible():
+                    backdrop.click(force=True)
+                    dialog.wait_for(state="hidden", timeout=2000)
+                    return
+            except Exception:
+                pass
+            # 3) Escape (multiple)
+            for _ in range(2):
+                self.page.keyboard.press("Escape")
+                try:
+                    dialog.wait_for(state="hidden", timeout=1500)
+                    return
+                except Exception:
+                    pass
+        try:
+            dialog.wait_for(state="hidden", timeout=2000)
+            return
+        except Exception:
+            pass
+        # 4) Last resort: clear portal and any leftover blocking state on main
+        self._dismiss_headlessui_portal_via_js()
+        self._ensure_main_content_interactable()
 
 
 
@@ -107,7 +182,9 @@ class BookingStep1Page:
     def enter_destination(self, address: str):
         def _do():
             self._fill_and_select_address(self.destination_input(), address)
+            # Single call: polls dynamically until I understand is clickable or timeout
             self._dismiss_destination_note_dialog_if_present()
+            self._close_any_modal_overlay()
         retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
 
     def click_get_started(self):
@@ -124,3 +201,17 @@ class BookingStep1Page:
         one_way_option = portal.get_by_role("option", name=re.compile(r"One[- ]way", re.I)).first
         one_way_option.wait_for(state="visible")
         one_way_option.click()
+
+    def select_item_golf_bag_standard(self):
+        self._dismiss_destination_note_dialog_if_present()
+        self._dismiss_cookie_consent_if_present()
+        # Wait for Item Details and scroll so Golf Bags row is in view
+        self.page.get_by_text("Golf Bags", exact=True).first.wait_for(state="visible")
+        self.page.get_by_text("Golf Bags", exact=True).first.scroll_into_view_if_needed()
+        # First input with name productLineCounters.0 is Golf Bags; set value directly (more reliable than + button)
+        golf_bags_input = self.page.locator('input[name="productLineCounters.0"]').first
+        golf_bags_input.wait_for(state="visible")
+        golf_bags_input.scroll_into_view_if_needed()
+        golf_bags_input.fill("1")
+        expect(golf_bags_input).to_have_value("1")
+        
