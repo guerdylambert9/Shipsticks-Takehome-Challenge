@@ -54,6 +54,11 @@ class BookingStep1Page:
             .or_(self.page.get_by_role("button", name=re.compile(r"calendar|select date|choose date", re.I)))
         ).first
 
+    def service_level_option(self):
+        # Locator: text-based radio/option
+        # Why: Exact text for selection; stable for user-facing choices
+        return self.page.get_by_text("Ground")
+
     def _option_for_address(self, address: str):
         """Option locator that matches address with flexibility (API may return with/without ', USA', etc.)."""
         parts = [p.strip() for p in address.split(",") if p.strip()]
@@ -357,3 +362,10 @@ class BookingStep1Page:
         # assert the selected date appears on the page (e.g. in main / shipment dates section).
         date_displayed = re.compile(r"Apr(il)?\s*\d{1,2},?\s*2026|2026", re.I)
         expect(self.page.locator("main")).to_contain_text(date_displayed)
+
+    def select_service_level_ground(self):
+        self.service_level_option().click()
+        expect(self.service_level_option()).to_be_checked()  # Assertion 8: Selected
+        # Verify Ground is shown in selected (green) state (bg-green-50 / bg-green-700 on staging)
+        ground_selected = self.page.locator("[class*='bg-green']").filter(has_text="Ground").first
+        expect(ground_selected).to_be_visible()
