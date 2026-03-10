@@ -32,3 +32,6 @@ def test_landing_and_get_started_navigates_to_booking(booking_page: BookingStep1
 
     # Select item
     booking_page.select_item_golf_bag_standard()
+
+    # Select delivery date (handle async picker)
+    booking_page.select_delivery_date("April 8, 2026")  # Adjust format if picker uses day only; e.g., "8"
