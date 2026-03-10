@@ -1,4 +1,5 @@
 import re
+import time
 from playwright.sync_api import Page, expect
 from config.config import BASE_URL
 from exceptions.booking_exceptions import *
@@ -38,6 +39,20 @@ class BookingStep1Page:
         # Locator: placeholder text
         # Why: Same as origin – consistent, readable
         return self.page.get_by_placeholder("Choose destination...")
+    
+    def item_select(self):
+        # Locator: role + text
+        # Why: Semantic role for select/combo; text for exact match, survives ID changes
+        #return self.page.get_by_role("combobox", name="Item")  # Assuming it's a combo; adjust if radio
+        return self.page.get_by_label("Golf Bags")
+
+    def delivery_date_picker(self):
+        # Staging: button shows "Please select a date" (not "Open calendar"). Try that first, then fallbacks.
+        return (
+            self.page.get_by_role("button", name="Please select a date")
+            .or_(self.page.get_by_role("button", name="Open calendar"))
+            .or_(self.page.get_by_role("button", name=re.compile(r"calendar|select date|choose date", re.I)))
+        ).first
 
     def _option_for_address(self, address: str):
         """Option locator that matches address with flexibility (API may return with/without ', USA', etc.)."""
@@ -57,6 +72,42 @@ class BookingStep1Page:
         else:
             pattern = re.escape(address)
         return self.page.get_by_role("option", name=re.compile(pattern, re.I)).first
+
+    def _is_headlessui_modal_open(self):
+        """Detect if a Headless UI modal is open (dialog or overlay). More reliable than dialog.is_visible() alone."""
+        try:
+            portal = self.page.locator("#headlessui-portal-root")
+            if portal.locator("[data-headlessui-state='open']").first.is_visible():
+                return True
+            if portal.locator("[role='dialog']").first.is_visible():
+                return True
+            if portal.locator("div.fixed.inset-0").first.is_visible():
+                return True
+        except Exception:
+            pass
+        return False
+    
+    def _dismiss_headlessui_portal_via_js(self):
+        """Last resort: clear Headless UI portal so overlay no longer covers the page."""
+        self.page.evaluate("""() => {
+            const root = document.getElementById('headlessui-portal-root');
+            if (root) root.innerHTML = '';
+        }""")
+
+    def _ensure_main_content_interactable(self):
+        """Remove inert/aria-hidden from main when modal left the app in a blocked state."""
+        self.page.evaluate("""() => {
+            document.querySelectorAll('main[inert], main[aria-hidden="true"]').forEach(el => {
+                el.removeAttribute('inert');
+                el.removeAttribute('aria-hidden');
+            });
+        }""")
+
+    def _remove_playwright_glass_overlay(self):
+        """Remove Playwright-injected x-pw-glass overlay so it doesn't block visibility checks."""
+        self.page.evaluate("""() => {
+            document.querySelectorAll('x-pw-glass').forEach(el => el.remove());
+        }""")
 
     def _wait_for_autocomplete_option(self, address: str):
         """Wait for the address option (div with role='option' in the combobox listbox) to be visible before proceeding.
@@ -123,12 +174,20 @@ class BookingStep1Page:
                     return
             except Exception:
                 return
-            # 1) Click "I understand" if present
+            # 1) Click "I understand" if present (case-insensitive; may be <button> or styled link)
             try:
-                btn = self.page.get_by_role("button", name="I understand")
+                btn = self.page.get_by_role("button", name=re.compile(r"I understand", re.I)).first
                 if btn.is_visible():
-                    btn.click()
-                    dialog.wait_for(state="hidden", timeout=2000)
+                    btn.click(force=True)
+                    dialog.wait_for(state="hidden", timeout=5000)
+                    return
+            except Exception:
+                pass
+            try:
+                btn = self.page.get_by_text(re.compile(r"^\s*I understand\s*$", re.I)).first
+                if btn.is_visible():
+                    btn.click(force=True)
+                    dialog.wait_for(state="hidden", timeout=5000)
                     return
             except Exception:
                 pass
@@ -158,6 +217,39 @@ class BookingStep1Page:
         # 4) Last resort: clear portal and any leftover blocking state on main
         self._dismiss_headlessui_portal_via_js()
         self._ensure_main_content_interactable()
+
+    def _wait_for_date_picker_visible_while_dismissing_modals(self, timeout_ms: int = 35000):
+        """Wait for the delivery date picker to be visible, dismissing any Headless UI modal
+        that appears in the meantime. Polls: if a portal modal is open we close it (including
+        JS fallback to clear the portal), then re-check for the picker until visible or timeout.
+        """
+        picker = self.delivery_date_picker()
+        deadline = time.time() + (timeout_ms / 1000.0)
+        poll_ms = 500
+        while time.time() < deadline:
+            try:
+                if self._is_headlessui_modal_open():
+                    self._close_any_modal_overlay()
+                    self._remove_playwright_glass_overlay()
+                    self._ensure_main_content_interactable()
+                    self.page.wait_for_timeout(400)
+                    continue
+            except Exception:
+                pass
+            try:
+                if picker.is_visible():
+                    return
+            except Exception:
+                pass
+            self.page.wait_for_timeout(poll_ms)
+        # One more attempt: clear modal, overlays, and any inert/aria-hidden on main
+        if self._is_headlessui_modal_open():
+            self._dismiss_headlessui_portal_via_js()
+            self.page.wait_for_timeout(500)
+        self._remove_playwright_glass_overlay()
+        self._ensure_main_content_interactable()
+        self.page.wait_for_timeout(200)
+        picker.wait_for(state="visible", timeout=5000)
 
 
 
@@ -204,6 +296,7 @@ class BookingStep1Page:
 
     def select_item_golf_bag_standard(self):
         self._dismiss_destination_note_dialog_if_present()
+        self._close_any_modal_overlay()
         self._dismiss_cookie_consent_if_present()
         # Wait for Item Details and scroll so Golf Bags row is in view
         self.page.get_by_text("Golf Bags", exact=True).first.wait_for(state="visible")
@@ -214,6 +307,53 @@ class BookingStep1Page:
         golf_bags_input.scroll_into_view_if_needed()
         golf_bags_input.fill("1")
         expect(golf_bags_input).to_have_value("1")
+        # Quantity change can re-open "Please note before proceeding" — close before asserting on radios
+        self._dismiss_destination_note_dialog_if_present()
+        self._close_any_modal_overlay()
+        if self._is_headlessui_modal_open():
+            self._dismiss_headlessui_portal_via_js()
         # Validate "Max 42 lb. Standard" is selected by default for Golf Bags #1
         standard_option = self.page.get_by_role("radio", name=re.compile(r"Max 42 lb\.\s*Standard|Standard", re.I))
         expect(standard_option.first).to_be_checked()
+
+    def select_delivery_date(self, date_str: str):
+        self._dismiss_destination_note_dialog_if_present()
+        self._dismiss_cookie_consent_if_present()
+        self._close_any_modal_overlay()
+        # Wait for Headless UI portal dialog to be gone so the date picker isn't covered
+        try:
+            self._headlessui_dialog().wait_for(state="hidden", timeout=5000)
+        except Exception:
+            pass
+        self.page.get_by_text(re.compile(r"delivery|date|when", re.I)).first.scroll_into_view_if_needed()
+        self._wait_for_date_picker_visible_while_dismissing_modals()
+        picker = self.delivery_date_picker()
+        picker.scroll_into_view_if_needed()
+        picker.click()
+        self.page.wait_for_selector("[role='grid']")
+        # Parse "April 8, 2026" -> month name and day number; calendar opens on current month (e.g. March 2026)
+        month_match = re.search(r"(\w+)\s+\d{1,2}", date_str)
+        month_name = month_match.group(1) if month_match else ""
+        day_match = re.search(r"\b(\d{1,2})\b", date_str)
+        day_num = day_match.group(1) if day_match else date_str
+        # Navigate to the correct month: click next-month until calendar shows e.g. "April 2026"
+        # Staging uses icon-only button (icon-arrow-right); aria-label fallback for other envs
+        next_btn = self.page.locator("button").filter(has=self.page.locator(".icon-arrow-right")).first.or_(
+            self.page.get_by_role("button", name=re.compile(r"next month|go to next", re.I))
+        )
+        target_header = re.compile(rf"{month_name}\s+\d{{4}}", re.I)
+        for _ in range(12):
+            if self.page.get_by_text(target_header).first.is_visible():
+                break
+            try:
+                next_btn.click(timeout=3000)
+                self.page.wait_for_timeout(300)
+            except Exception:
+                break
+        # Click the enabled day only (avoid disabled days like past dates or from other months)
+        day_cell = self.page.locator("button.rdp-day:not(.rdp-day_disabled)").filter(has_text=re.compile(rf"^{day_num}$"))
+        day_cell.first.click()
+        # After selection the trigger no longer says "Please select a date" (it shows e.g. "Apr 8, 2026");
+        # assert the selected date appears on the page (e.g. in main / shipment dates section).
+        date_displayed = re.compile(r"Apr(il)?\s*\d{1,2},?\s*2026|2026", re.I)
+        expect(self.page.locator("main")).to_contain_text(date_displayed)
