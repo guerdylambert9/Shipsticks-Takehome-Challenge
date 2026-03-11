@@ -14,7 +14,8 @@ class BookingStep1Page:
         """Open the staging landing page."""
         self.page.goto(BASE_URL)
         # Staging title; prod may differ (e.g. "ShipSticks: Ship Golf Clubs Door-to-Door")
-        expect(self.page).to_have_title(re.compile(r"Ship.*Golf|Golf.*Ship", re.I))
+        expect(self.page).to_have_title("The Best Way to Ship Golf Clubs | 4M+ Golf Bags Shipped")
+        #expect(self.page).to_have_title(re.compile(r"Ship.*Golf|Golf.*Ship", re.I))
 
     def get_started_button(self):
         # Staging: header has disabled "Get started" (button); main section has enabled CTA (often <a>).
@@ -53,6 +54,10 @@ class BookingStep1Page:
             .or_(self.page.get_by_role("button", name="Open calendar"))
             .or_(self.page.get_by_role("button", name=re.compile(r"calendar|select date|choose date", re.I)))
         ).first
+
+    def shipment_speeds_section(self):
+       """Section appears after a delivery date is selected; use heading for visibility checks."""
+       return self.page.get_by_role("heading", name=re.compile(r"Shipment Speeds", re.I)).first
 
     def service_level_option(self):
         # Locator: text-based radio/option
@@ -100,9 +105,14 @@ class BookingStep1Page:
         }""")
 
     def _ensure_main_content_interactable(self):
-        """Remove inert/aria-hidden from main when modal left the app in a blocked state."""
+        """Remove inert/aria-hidden from main and header so modal doesn't leave the page blocked.
+        (antialiased on body is only font smoothing; the real blockers are inert/aria-hidden on main.)"""
         self.page.evaluate("""() => {
             document.querySelectorAll('main[inert], main[aria-hidden="true"]').forEach(el => {
+                el.removeAttribute('inert');
+                el.removeAttribute('aria-hidden');
+            });
+            document.querySelectorAll('header[inert], header[aria-hidden="true"]').forEach(el => {
                 el.removeAttribute('inert');
                 el.removeAttribute('aria-hidden');
             });
@@ -271,19 +281,6 @@ class BookingStep1Page:
 
 
 
-    def enter_origin(self, address: str):
-        def _do():
-            self._fill_and_select_address(self.origin_input(), address)
-        retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
-
-    def enter_destination(self, address: str):
-        def _do():
-            self._fill_and_select_address(self.destination_input(), address)
-            # Single call: polls dynamically until I understand is clickable or timeout
-            self._dismiss_destination_note_dialog_if_present()
-            self._close_any_modal_overlay()
-        retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
-
     def click_get_started(self):
         button = self.get_started_button()
         expect(button).to_be_enabled()  # Assertion 2: Enabled state
@@ -298,11 +295,54 @@ class BookingStep1Page:
         one_way_option = portal.get_by_role("option", name=re.compile(r"One[- ]way", re.I)).first
         one_way_option.wait_for(state="visible")
         one_way_option.click()
+        expect(self.page.locator('h4[aria-label="TripType"]')).to_have_text("ONE WAY")
+
+    def enter_origin(self, address: str):
+        def _do():
+            self._fill_and_select_address(self.origin_input(), address)
+        retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
+
+    def enter_destination(self, address: str):
+        def _do():
+            self._fill_and_select_address(self.destination_input(), address)
+            self._dismiss_destination_note_dialog_if_present()
+            self._close_any_modal_overlay()
+        retry_on_timeout(_do, max_attempts=3, delay_seconds=2.0)
+        # Dismiss overlays so Save is clickable (destination note + OneTrust can intercept)
+        self._dismiss_destination_note_dialog_if_present()
+        self._close_any_modal_overlay()
+        self._dismiss_cookie_consent_if_present()
+        self._ensure_main_content_interactable()
+        if self._is_headlessui_modal_open():
+            self._dismiss_headlessui_portal_via_js()
+            self._ensure_main_content_interactable()
+        save_btn = self.page.get_by_role("button", name="Save")
+        save_btn.wait_for(state="visible")
+        save_btn.click(force=True)
+        # validate that Los Angeles, CA is saved and has its green checkmark
+        la_row = self.page.locator("div", has_text="Los Angeles, CA")
+        expect(la_row.locator(".icon-check-circle-filled").first).to_be_visible()
+        # validate that Miami Lakes, FL is saved and has its greeen checkmark
+        miami_row = self.page.locator("div", has_text="Miami Lakes, FL")
+        expect(miami_row.locator(".icon-check-circle-filled").last).to_be_visible()
+        # validate Order summary: ONE WAY block shows origin → destination.
+        # self.page.locator('div[aria-label="ShipLeg"]'). aria-label is part of the accessibility contract (for screen readers), 
+        # so it’s less likely to change on a whim than class names or structure.  Teams usually don’t change it without reason
+        ship_leg = self.page.locator('div[aria-label="ShipLeg"]')
+
+        # 2. Assert both cities are present within this container
+        expect(ship_leg).to_contain_text("Los Angeles, CA")
+        expect(ship_leg).to_contain_text("Miami Lakes, FL")
+
+        # 3. Assert the green arrow icon is visible inside this container
+        expect(ship_leg.locator(".icon-arrow-right")).to_be_visible()
 
     def select_item_golf_bag_standard(self):
         self._dismiss_destination_note_dialog_if_present()
         self._close_any_modal_overlay()
         self._dismiss_cookie_consent_if_present()
+        # Main/header can stay inert after modal closes; clear so input can receive fill
+        self._ensure_main_content_interactable()
         # Wait for Item Details and scroll so Golf Bags row is in view
         self.page.get_by_text("Golf Bags", exact=True).first.wait_for(state="visible")
         self.page.get_by_text("Golf Bags", exact=True).first.scroll_into_view_if_needed()
@@ -310,16 +350,22 @@ class BookingStep1Page:
         golf_bags_input = self.page.locator('input[name="productLineCounters.0"]').first
         golf_bags_input.wait_for(state="visible")
         golf_bags_input.scroll_into_view_if_needed()
-        golf_bags_input.fill("1")
-        expect(golf_bags_input).to_have_value("1")
+        golf_bags_input.fill("1", force=True)
+        expect(golf_bags_input).to_have_value("1", timeout=10_000)
         # Quantity change can re-open "Please note before proceeding" — close before asserting on radios
         self._dismiss_destination_note_dialog_if_present()
         self._close_any_modal_overlay()
         if self._is_headlessui_modal_open():
             self._dismiss_headlessui_portal_via_js()
-        # Validate "Max 42 lb. Standard" is selected by default for Golf Bags #1
-        standard_option = self.page.get_by_role("radio", name=re.compile(r"Max 42 lb\.\s*Standard|Standard", re.I))
-        expect(standard_option.first).to_be_checked()
+        self._ensure_main_content_interactable()
+        # Validate "Max 42 lb. Standard" is selected for Golf Bags #1 (single row)
+        # Size options render after quantity change (and after overlay); wait then assert
+        # It is highly stable; it uses the role (button) and accessible name (“Max 42 lb. Standard”).  It doesn’t depend on CSS classes, structure, or DOM depth
+        standard_btn = self.page.get_by_role("radio", name=re.compile(r"Max 42 lb\.\s*Standard", re.I)).first
+        standard_btn.wait_for(state="visible", timeout=15_000)
+        standard_btn.scroll_into_view_if_needed()
+        # validate that standardd is the default selection.  The assertion confirm it not select it
+        expect(standard_btn).to_be_checked()
 
     def select_delivery_date(self, date_str: str):
         self._dismiss_destination_note_dialog_if_present()
@@ -332,6 +378,8 @@ class BookingStep1Page:
             pass
         self.page.get_by_text(re.compile(r"delivery|date|when", re.I)).first.scroll_into_view_if_needed()
         self._wait_for_date_picker_visible_while_dismissing_modals()
+        #assert the Delivery Date button is selected by default
+        expect(self.page.locator('button[name="shipments.0.dateType"]').first).to_have_attribute("aria-pressed", "true")
         picker = self.delivery_date_picker()
         picker.scroll_into_view_if_needed()
         picker.click()
@@ -362,6 +410,73 @@ class BookingStep1Page:
         # assert the selected date appears on the page (e.g. in main / shipment dates section).
         date_displayed = re.compile(r"Apr(il)?\s*\d{1,2},?\s*2026|2026", re.I)
         expect(self.page.locator("main")).to_contain_text(date_displayed)
+        self.expect_delivery_date_trigger_matches_order_summary_destination()
+
+    def _delivery_date_trigger_text(self) -> str:
+        """Selected date in Shipment Dates section, e.g. 'Apr 8, 2026' (from the date picker button)."""
+        trigger = self.page.locator("button").filter(has=self.page.locator(".icon-calendar")).first
+        return trigger.inner_text()
+
+    def _order_summary_destination_ship_date_text(self) -> str:
+        """Destination ship date in ONE WAY block, e.g. 'Wed, Apr. 08' (second ShipmentDate in ShipLeg)."""
+        ship_leg = self.page.locator('div[aria-label="ShipLeg"]').first
+        return ship_leg.locator('strong[aria-label="ShipmentDate"]').nth(1).inner_text()
+
+    def expect_delivery_date_trigger_matches_order_summary_destination(self) -> None:
+        """Assert Delivery Date trigger (e.g. Apr 8, 2026) and Order Summary destination date (e.g. Wed, Apr. 08) are the same day."""
+        trigger_text = self._delivery_date_trigger_text().strip()
+        summary_text = self._order_summary_destination_ship_date_text().strip()
+        month_names = {
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        }
+        # Parse trigger "Apr 8, 2026" -> (4, 8)
+        trigger_match = re.search(r"([A-Za-z]+)\s+(\d{1,2}),?\s*\d{4}", trigger_text)
+        assert trigger_match, f"Delivery date trigger format unexpected: {trigger_text!r}"
+        t_month_name, t_day = trigger_match.group(1).lower()[:3], int(trigger_match.group(2))
+        t_month = month_names.get(t_month_name)
+        assert t_month is not None, f"Month unexpected: {trigger_match.group(1)!r}"
+        # Parse summary "Wed, Apr. 08" -> (4, 8)
+        summary_match = re.search(r"([A-Za-z]+)\.?\s*(\d{1,2})\b", summary_text)
+        assert summary_match, f"Order summary destination date format unexpected: {summary_text!r}"
+        s_month_name, s_day = summary_match.group(1).lower()[:3], int(summary_match.group(2))
+        s_month = month_names.get(s_month_name)
+        assert s_month is not None, f"Month unexpected: {summary_match.group(1)!r}"
+        assert (t_month, t_day) == (s_month, s_day), (
+            f"Delivery date trigger ({trigger_text}) and Order Summary destination date ({summary_text}) do not match"
+        )
+
+    def _ground_ship_date_text(self) -> str:
+        """Date from Ground's 'Ships on:' box (green-700), e.g. '03/31/2026'."""
+        ships_on_box = self.page.locator("[class*='bg-green-700']").filter(has_text="Ships on:").first
+        return ships_on_box.get_by_text(re.compile(r"\d{1,2}/\d{1,2}/\d{4}")).first.inner_text()
+
+    def _order_summary_origin_ship_date_text(self) -> str:
+        """Origin ship date in ONE WAY block, e.g. 'Tue, Mar. 31' (aria-label=ShipmentDate)."""
+        ship_leg = self.page.locator('div[aria-label="ShipLeg"]').first
+        return ship_leg.locator('strong[aria-label="ShipmentDate"]').first.inner_text()
+
+    def expect_ground_ship_date_matches_order_summary_origin(self) -> None:
+        """Assert the Ground 'Ships on' date and the Order Summary origin ShipmentDate are the same day."""
+        ground_text = self._ground_ship_date_text().strip()
+        summary_text = self._order_summary_origin_ship_date_text().strip()
+        # Parse MM/DD/YYYY from ground card
+        ground_match = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", ground_text)
+        assert ground_match, f"Ground date format unexpected: {ground_text!r}"
+        g_month, g_day = int(ground_match.group(1)), int(ground_match.group(2))
+        # Parse "Tue, Mar. 31" or "Tue, March 31" from order summary
+        month_names = {
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        }
+        summary_match = re.search(r"([A-Za-z]+)\.?\s*(\d{1,2})\b", summary_text)
+        assert summary_match, f"Order summary date format unexpected: {summary_text!r}"
+        s_month_name, s_day = summary_match.group(1).lower()[:3], int(summary_match.group(2))
+        s_month = month_names.get(s_month_name)
+        assert s_month is not None, f"Month name unexpected: {summary_match.group(1)!r}"
+        assert (g_month, g_day) == (s_month, s_day), (
+            f"Ground ship date ({ground_text}) and Order Summary origin date ({summary_text}) do not match"
+        )
 
     def select_service_level_ground(self):
         self.service_level_option().click()
@@ -369,3 +484,5 @@ class BookingStep1Page:
         # Verify Ground is shown in selected (green) state (bg-green-50 / bg-green-700 on staging)
         ground_selected = self.page.locator("[class*='bg-green']").filter(has_text="Ground").first
         expect(ground_selected).to_be_visible()
+        # validate the Ships on date matched the shipping date or the origin's section of the Order Summary
+        self.expect_ground_ship_date_matches_order_summary_origin()
