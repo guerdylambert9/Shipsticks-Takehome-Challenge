@@ -33,8 +33,14 @@ def test_landing_and_get_started_navigates_to_booking(booking_page: BookingStep1
     # Select item
     booking_page.select_item_golf_bag_standard()
 
+    # Shipment Speeds is hidden until a date is selected
+    expect(booking_page.shipment_speeds_section()).to_be_hidden()
+
     # Select delivery date (handle async picker)
     booking_page.select_delivery_date("April 8, 2026")  # Adjust format if picker uses day only; e.g., "8"
+
+    # Shipment Speeds is visible after a date is selected
+    expect(booking_page.shipment_speeds_section()).to_be_visible()
 
     # Select service level
     booking_page.select_service_level_ground()
