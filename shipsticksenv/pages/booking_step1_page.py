@@ -21,42 +21,41 @@ class BookingStep1Page:
         # Staging: header has disabled "Get started" (button); main section has enabled CTA (often <a>).
         # Scroll to main section first so the enabled CTA is in view/DOM, then match both button and link.
         self.page.get_by_text("Great golf trips", exact=False).first.scroll_into_view_if_needed()
-        return self.page.locator("a, button").filter(has_text=re.compile(r"Get started", re.I)).nth(1)
+        # Unique: the only "Get started" link that goes to /book/ship
+        return self.page.locator('a[href="/book/ship"]').filter(has_text=re.compile(r"Get started", re.I)).first
 
     def shipment_type_dropdown(self):
-        # On /book/ship the dropdown button is associated with label "Trip Type"; fallback to visible value.
-        return self.page.get_by_label("Trip Type").or_(self.page.get_by_text("Round trip").first)
+        # Label has empty for="", so it's not associated with the button; get_by_label alone fails.
+        # Fallback: listbox button shows current value ("One way" or "Round trip") as its name.
+        return self.page.get_by_label("Trip Type").or_(
+            self.page.get_by_role("button", name=re.compile(r"One way|Round trip", re.I)).first
+        )
 
     def _headlessui_dialog(self):
         """Headless UI renders dialogs in a portal; scope to that so we target the right one."""
         return self.page.locator("#headlessui-portal-root [role='dialog']")
 
     def origin_input(self):
-        # Locator: placeholder text
-        # Why: User-visible placeholder; stable if label changes, better than CSS
-        return self.page.get_by_placeholder("Choose origin...")
+        # Role + name is the accessibility contract; it’s what assistive tech uses and teams are less likely to change without reason.
+        return self.page.get_by_role("combobox", name="Where from?")
 
     def destination_input(self):
-        # Locator: placeholder text
-        # Why: Same as origin – consistent, readable
-        return self.page.get_by_placeholder("Choose destination...")
+        # Role + name is the accessibility contract; it’s what assistive tech uses and teams are less likely to change without reason.
+        return self.page.get_by_role("combobox", name="Where to?")
     
     def item_select(self):
-        # Locator: role + text
-        # Why: Semantic role for select/combo; text for exact match, survives ID changes
-        #return self.page.get_by_role("combobox", name="Item")  # Assuming it's a combo; adjust if radio
+        # Uses the accessibility contract.  target the control by its visible label, which is how users and assistive tech identify it
         return self.page.get_by_label("Golf Bags")
 
     def delivery_date_picker(self):
-        # Staging: button shows "Please select a date" (not "Open calendar"). Try that first, then fallbacks.
-        return (
-            self.page.get_by_role("button", name="Please select a date")
-            .or_(self.page.get_by_role("button", name="Open calendar"))
-            .or_(self.page.get_by_role("button", name=re.compile(r"calendar|select date|choose date", re.I)))
-        ).first
+        # Role + accessible name You’re using the control’s role (button) and its accessible name (the text “Please select a date” from the inner <span>). 
+        # That’s how the control is exposed to users and assistive tech, so it’s a good basis for a locator.
+        return ( self.page.get_by_role("button", name="Please select a date"))
 
     def shipment_speeds_section(self):
        """Section appears after a delivery date is selected; use heading for visibility checks."""
+       # Role (heading, which matches the <h2>) and accessible name (the heading text “Shipment Speeds”). 
+       # That’s how the section is identified for users and assistive tech
        return self.page.get_by_role("heading", name=re.compile(r"Shipment Speeds", re.I)).first
 
     def service_level_option(self):
@@ -295,7 +294,9 @@ class BookingStep1Page:
         one_way_option = portal.get_by_role("option", name=re.compile(r"One[- ]way", re.I)).first
         one_way_option.wait_for(state="visible")
         one_way_option.click()
-        expect(self.page.locator('h4[aria-label="TripType"]')).to_have_text("ONE WAY")
+        # use the heading’s accessible name “TripType” (from aria-label) and part of the a11y contract and 
+        # is usually more stable than class names or DOM structure
+        expect(self.page.get_by_role("heading", name="TripType")).to_have_text("ONE WAY")
 
     def enter_origin(self, address: str):
         def _do():
