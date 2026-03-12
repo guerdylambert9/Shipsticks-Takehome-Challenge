@@ -10,7 +10,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=False)
 def keep_browser_open(page):
     """Keep the browser open after each test (pass or fail). Close the Inspector or browser when done."""
     yield
