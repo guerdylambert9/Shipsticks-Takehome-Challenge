@@ -29,6 +29,11 @@ Automated test suite for the ShipSticks Senior QA Engineer take-home challenge.
    ```bash
    playwright install
    ```
+   To install only Chromium or only Firefox:
+   ```bash
+   playwright install chromium   # default
+   playwright install firefox
+   ```
 
 5. **Optional — set base URL**  
    Tests use `https://app.staging.shipsticks.com` by default. To override, create a `.env` file in `shipsticksenv/`:
@@ -40,9 +45,19 @@ Automated test suite for the ShipSticks Senior QA Engineer take-home challenge.
 
 From the **`shipsticksenv`** directory with the virtual environment activated:
 
-**Happy-path suite (recommended):**
+**Happy-path suite (recommended)** — uses **Chromium** by default:
 ```bash
 pytest tests/ -m happy_path --headed
+```
+
+**Run in Firefox:**
+```bash
+pytest tests/ -m happy_path --headed --browser firefox
+```
+
+**Run in WebKit (Safari):**
+```bash
+pytest tests/ -m happy_path --headed --browser webkit
 ```
 
 **All tests:**
@@ -61,6 +76,9 @@ pytest tests/ -m happy_path --headed
 # Report: shipsticksenv/report.html
 ```
 
+**Note:** The browser viewport is set to 1920×1080 before each test. After each test the browser stays open (Playwright Inspector) until you close it or continue.
+
 ## Test markers
 
 - `happy_path` — main booking flow (landing → address → item → date → service)
+
